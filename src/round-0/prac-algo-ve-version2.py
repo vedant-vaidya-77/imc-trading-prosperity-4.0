@@ -18,25 +18,33 @@ class Trader:
             order_depth: OrderDepth = state.order_depths[product]
             orders: List[Order] = []
             
-            # We need the current order book extremes for BOTH products now to Penny-Jump
             if len(order_depth.buy_orders) > 0 and len(order_depth.sell_orders) > 0:
                 best_bid = max(order_depth.buy_orders.keys())
                 best_ask = min(order_depth.sell_orders.keys())
                 mid_price = (best_bid + best_ask) / 2
                 
                 # ---------------------------------------------------------
-                # STRATEGY 1: EMERALDS (Penny-Jumping Market Maker)
+                # STRATEGY 1: EMERALDS (The Sniper)
                 # ---------------------------------------------------------
                 if product == 'EMERALDS':
                     current_position = state.position.get('EMERALDS', 0)
                     POSITION_LIMIT = 20
                     
-                    # We know fair value is 10000. 
-                    # Instead of a passive 9998/10002, we aggressively jump the queue.
-                    # We will bid 1 point higher than the best bid, up to a max of 9999.
-                    my_buy_price = min(best_bid + 1, 9999)
-                    # We will ask 1 point lower than the best ask, down to a min of 10001.
-                    my_sell_price = max(best_ask - 1, 10001)
+                    # Acceptable limits (Fair value is 10000)
+                    acceptable_buy = 9998
+                    acceptable_sell = 10002
+                    
+                    # THE BUY SNIPER
+                    if best_ask <= acceptable_buy:
+                        my_buy_price = best_ask # Instantly take the cheap ask!
+                    else:
+                        my_buy_price = min(best_bid + 1, acceptable_buy) # Penny jump
+                        
+                    # THE SELL SNIPER
+                    if best_bid >= acceptable_sell:
+                        my_sell_price = best_bid # Instantly sell to the high bidder!
+                    else:
+                        my_sell_price = max(best_ask - 1, acceptable_sell) # Penny jump
                     
                     max_buy = POSITION_LIMIT - current_position
                     if max_buy > 0:
@@ -49,7 +57,7 @@ class Trader:
                     result[product] = orders
 
                 # ---------------------------------------------------------
-                # STRATEGY 2: TOMATOES (Dynamic Penny-Jumping)
+                # STRATEGY 2: TOMATOES (Dynamic Sniper + Aggressive Skew)
                 # ---------------------------------------------------------
                 if product == 'TOMATOES':
                     current_position = state.position.get('TOMATOES', 0)
@@ -61,7 +69,7 @@ class Trader:
                         tomato_history.pop(0)
                         
                     if len(tomato_history) == 5:
-                        # 1. Calculate Fair Value
+                        # 1. Math & Fair Value
                         sma = sum(tomato_history) / 5
                         
                         buy_vol = sum(order_depth.buy_orders.values())
@@ -79,16 +87,25 @@ class Trader:
                             obi_shift = -1  
                             
                         dynamic_fair_value = sma + obi_shift
-                        skew = -int(current_position / 10)
                         
-                        # 2. AGGRESSIVE PENNY-JUMPING EXECUTION
-                        # We want to be at the very front of the line (best_bid + 1),
-                        # BUT we refuse to pay more than our (dynamic_fair_value - 1 + skew).
-                        my_buy_price = min(best_bid + 1, int(round(dynamic_fair_value - 1 + skew)))
+                        # 2. Aggressive Skew (Divide by 5 instead of 10)
+                        skew = -int(current_position / 5)
                         
-                        # We want to sell faster than anyone else (best_ask - 1),
-                        # BUT we refuse to sell for less than our (dynamic_fair_value + 1 + skew).
-                        my_sell_price = max(best_ask - 1, int(round(dynamic_fair_value + 1 + skew)))
+                        # 3. Calculate what we are willing to accept
+                        acceptable_buy = int(round(dynamic_fair_value - 1 + skew))
+                        acceptable_sell = int(round(dynamic_fair_value + 1 + skew))
+                        
+                        # 4. THE BUY SNIPER
+                        if best_ask <= acceptable_buy:
+                            my_buy_price = best_ask
+                        else:
+                            my_buy_price = min(best_bid + 1, acceptable_buy)
+                            
+                        # 5. THE SELL SNIPER
+                        if best_bid >= acceptable_sell:
+                            my_sell_price = best_bid
+                        else:
+                            my_sell_price = max(best_ask - 1, acceptable_sell)
                         
                         max_buy = POSITION_LIMIT - current_position
                         if max_buy > 0:
