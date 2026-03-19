@@ -7,7 +7,7 @@ class Trader:
     def run(self, state: TradingState):
         result = {}
         
-        # 1. STATE MANAGEMENT (MEMORY)
+        # 1. STATE MANAGEMENT
         if state.traderData == "":
             tomato_history = []
         else:
@@ -18,89 +18,77 @@ class Trader:
             order_depth: OrderDepth = state.order_depths[product]
             orders: List[Order] = []
             
-            # ---------------------------------------------------------
-            # STRATEGY 1: EMERALDS (Stationary Market Making)
-            # ---------------------------------------------------------
-            if product == 'EMERALDS':
-                current_position = state.position.get('EMERALDS', 0)
-                POSITION_LIMIT = 20
+            # We need the current order book extremes for BOTH products now to Penny-Jump
+            if len(order_depth.buy_orders) > 0 and len(order_depth.sell_orders) > 0:
+                best_bid = max(order_depth.buy_orders.keys())
+                best_ask = min(order_depth.sell_orders.keys())
+                mid_price = (best_bid + best_ask) / 2
                 
-                # Base Fair Value is always 10000
-                # INVENTORY SKEW: If we hold > 10, we drop our sell price to 10001 to clear inventory fast.
-                # If we hold < -10, we raise our buy price to 9999 to cover our shorts fast.
-                buy_price = 9998
-                sell_price = 10002
-                
-                if current_position > 10:
-                    sell_price -= 1  # More aggressive to sell
-                    buy_price -= 1   # Less aggressive to buy
-                elif current_position < -10:
-                    buy_price += 1   # More aggressive to buy
-                    sell_price += 1  # Less aggressive to sell
-                
-                max_buy = POSITION_LIMIT - current_position
-                if max_buy > 0:
-                    orders.append(Order(product, buy_price, max_buy))
+                # ---------------------------------------------------------
+                # STRATEGY 1: EMERALDS (Penny-Jumping Market Maker)
+                # ---------------------------------------------------------
+                if product == 'EMERALDS':
+                    current_position = state.position.get('EMERALDS', 0)
+                    POSITION_LIMIT = 20
                     
-                max_sell = -POSITION_LIMIT - current_position
-                if max_sell < 0:
-                    orders.append(Order(product, sell_price, max_sell))
+                    # We know fair value is 10000. 
+                    # Instead of a passive 9998/10002, we aggressively jump the queue.
+                    # We will bid 1 point higher than the best bid, up to a max of 9999.
+                    my_buy_price = min(best_bid + 1, 9999)
+                    # We will ask 1 point lower than the best ask, down to a min of 10001.
+                    my_sell_price = max(best_ask - 1, 10001)
                     
-                result[product] = orders
+                    max_buy = POSITION_LIMIT - current_position
+                    if max_buy > 0:
+                        orders.append(Order(product, my_buy_price, max_buy))
+                        
+                    max_sell = -POSITION_LIMIT - current_position
+                    if max_sell < 0:
+                        orders.append(Order(product, my_sell_price, max_sell))
+                        
+                    result[product] = orders
 
-            # ---------------------------------------------------------
-            # STRATEGY 2: TOMATOES (Trending Market Making + OBI + Skew)
-            # ---------------------------------------------------------
-            if product == 'TOMATOES':
-                current_position = state.position.get('TOMATOES', 0)
-                POSITION_LIMIT = 20
-                
-                # Ensure we have data to do math
-                if len(order_depth.buy_orders) > 0 and len(order_depth.sell_orders) > 0:
-                    best_bid = max(order_depth.buy_orders.keys())
-                    best_ask = min(order_depth.sell_orders.keys())
-                    mid_price = (best_bid + best_ask) / 2
+                # ---------------------------------------------------------
+                # STRATEGY 2: TOMATOES (Dynamic Penny-Jumping)
+                # ---------------------------------------------------------
+                if product == 'TOMATOES':
+                    current_position = state.position.get('TOMATOES', 0)
+                    POSITION_LIMIT = 20
                     
                     tomato_history.append(mid_price)
                     
-                    # Window Size: 5 ticks
                     if len(tomato_history) > 5:
                         tomato_history.pop(0)
                         
                     if len(tomato_history) == 5:
-                        # 1. BASELINE: Simple Moving Average
+                        # 1. Calculate Fair Value
                         sma = sum(tomato_history) / 5
                         
-                        # 2. HEURISTIC 1: Order Book Imbalance (OBI)
-                        # Calculate total volume of buyers vs sellers
                         buy_vol = sum(order_depth.buy_orders.values())
-                        # Sell volumes are negative, so we use abs()
                         sell_vol = abs(sum(order_depth.sell_orders.values())) 
-                        
                         total_vol = buy_vol + sell_vol
+                        
                         obi = 0
                         if total_vol > 0:
-                            # OBI ranges from -1 (all sellers) to +1 (all buyers)
                             obi = (buy_vol - sell_vol) / total_vol 
-                        
-                        # Shift Fair Value based on OBI
+                            
                         obi_shift = 0
                         if obi > 0.5:
-                            obi_shift = 1   # Buyers are aggressive, shift value UP
+                            obi_shift = 1   
                         elif obi < -0.5:
-                            obi_shift = -1  # Sellers are aggressive, shift value DOWN
+                            obi_shift = -1  
                             
                         dynamic_fair_value = sma + obi_shift
-                        
-                        # 3. HEURISTIC 2: Inventory Skew
-                        # For every 10 items we hold, we shift our prices by 1 point.
-                        # If position = 20, skew = -2. If position = -20, skew = +2.
                         skew = -int(current_position / 10)
                         
-                        # 4. FINAL ORDER CALCULATION
-                        # We quote 2 points wide from our dynamic fair value, then apply the skew
-                        my_buy_price = int(round(dynamic_fair_value - 2 + skew))
-                        my_sell_price = int(round(dynamic_fair_value + 2 + skew))
+                        # 2. AGGRESSIVE PENNY-JUMPING EXECUTION
+                        # We want to be at the very front of the line (best_bid + 1),
+                        # BUT we refuse to pay more than our (dynamic_fair_value - 1 + skew).
+                        my_buy_price = min(best_bid + 1, int(round(dynamic_fair_value - 1 + skew)))
+                        
+                        # We want to sell faster than anyone else (best_ask - 1),
+                        # BUT we refuse to sell for less than our (dynamic_fair_value + 1 + skew).
+                        my_sell_price = max(best_ask - 1, int(round(dynamic_fair_value + 1 + skew)))
                         
                         max_buy = POSITION_LIMIT - current_position
                         if max_buy > 0:
@@ -110,9 +98,7 @@ class Trader:
                         if max_sell < 0:
                             orders.append(Order(product, my_sell_price, max_sell))
 
-                result[product] = orders
+                    result[product] = orders
 
-        # 3. STATE SAVING
         new_traderData = json.dumps(tomato_history)
-        
         return result, 1, new_traderData
