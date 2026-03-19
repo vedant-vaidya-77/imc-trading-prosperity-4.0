@@ -12,7 +12,6 @@ class Trader:
         result = {}
         
         # 1. LOAD OUR MEMORY (STATE)
-        # We deserialize the history from the previous tick
         if state.traderData == "":
             tomato_history = []
         else:
@@ -30,7 +29,7 @@ class Trader:
                 current_position = state.position.get('EMERALDS', 0)
                 POSITION_LIMIT = 20
                 
-                # Market Making: Buy at 9998, Sell at 10002
+                # Market Making: Hardcoded Fair Value of 10000
                 max_buy = POSITION_LIMIT - current_position
                 if max_buy > 0:
                     orders.append(Order(product, 9998, max_buy))
@@ -48,43 +47,37 @@ class Trader:
                 current_position = state.position.get('TOMATOES', 0)
                 POSITION_LIMIT = 20
                 
-                # Ensure the order book isn't completely empty before doing math
                 if len(order_depth.buy_orders) > 0 and len(order_depth.sell_orders) > 0:
                     best_bid = max(order_depth.buy_orders.keys())
                     best_ask = min(order_depth.sell_orders.keys())
                     mid_price = (best_bid + best_ask) / 2
                     
-                    # Add current price to our history array
                     tomato_history.append(mid_price)
                     
-                    # Apply your optimized Window Size: 5
+                    # Window Size: 5 ticks
                     if len(tomato_history) > 5:
                         tomato_history.pop(0)
                         
-                    # Only trade if we have a full 5 ticks of data to calculate the SMA
                     if len(tomato_history) == 5:
+                        # Dynamic Fair Value (Simple Moving Average)
                         sma = sum(tomato_history) / 5
                         
-                        # Apply your optimized Threshold: 1
-                        # (Pro-tip: If you lose money to spread fees in the live simulation, 
-                        # bump this 1 up to a 1.5 or 2 for safety)
-                        if mid_price < sma - 1:
-                            max_buy = POSITION_LIMIT - current_position
-                            if max_buy > 0:
-                                # Execute buy order
-                                orders.append(Order(product, best_ask, max_buy))
-                                
-                        elif mid_price > sma + 1:
-                            max_sell = -POSITION_LIMIT - current_position
-                            if max_sell < 0:
-                                # Execute sell order
-                                orders.append(Order(product, best_bid, max_sell))
+                        # Market Making: Place limit orders around our SMA
+                        # We use round() and int() because the engine requires integer prices
+                        my_buy_price = int(round(sma - 2))
+                        my_sell_price = int(round(sma + 2))
+                        
+                        max_buy = POSITION_LIMIT - current_position
+                        if max_buy > 0:
+                            orders.append(Order(product, my_buy_price, max_buy))
+                            
+                        max_sell = -POSITION_LIMIT - current_position
+                        if max_sell < 0:
+                            orders.append(Order(product, my_sell_price, max_sell))
 
                 result[product] = orders
 
         # 3. SAVE OUR MEMORY FOR THE NEXT TICK
-        # Serialize the array back into a JSON string so the engine remembers it
         new_traderData = json.dumps(tomato_history)
         
-        # 4. RETURN EXPECTED FORMAT
         return result, 1, new_traderData
